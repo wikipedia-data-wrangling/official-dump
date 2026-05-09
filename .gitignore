@@ -216,3 +216,26 @@ __marimo__/
 
 # Streamlit
 .streamlit/secrets.toml
+
+# ----------------------------------------------------------------------------
+# Project data — never commit dump payloads, API caches, or query exports.
+# Bulk dumps for the current pipeline live on /media/simone/ssd1/ (outside
+# the repo); the entries below cover data that historically landed inside
+# the working tree.
+# ----------------------------------------------------------------------------
+
+# Legacy pipeline (__inherited__/) data
+__inherited__/finished/
+__inherited__/finished_test/
+__inherited__/apicache/
+__inherited__/logs/
+
+# Top-level scratch exports
+result_export.json
+
+# Generic catch-alls for data files that should never be tracked
+*.7z
+*.xml.gz
+*.xml.bz2
+*.sql.gz
+*.dump

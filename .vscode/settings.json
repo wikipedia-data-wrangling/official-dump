@@ -1,0 +1,12 @@
+{
+  "pgsql.connections": [
+    {
+      "host": "/var/run/postgresql",
+      "port": "5434",
+      "dbname": "wiki20260401",
+      "user": "simone",
+      "emptyPasswordInput": true,
+      "applicationName": "vscode-pgsql"
+    }
+  ]
+}
