@@ -6,7 +6,15 @@
       "dbname": "wiki20260401",
       "user": "simone",
       "emptyPasswordInput": true,
-      "applicationName": "vscode-pgsql"
+      "applicationName": "vscode-pgsql",
+      "id": "BB95FE91-F622-425A-BC69-09BA028360BE",
+      "server": "/var/run/postgresql",
+      "database": "wiki20260401",
+      "profileName": "/var/run/postgresql, wiki20260401 (undefined)",
+      "groupId": "190C95E5-3574-43D3-AE5A-F74C4EBCD46E",
+      "expiresOn": 0,
+      "password": "",
+      "sshPassword": ""
     }
   ]
 }

@@ -99,9 +99,10 @@ TABLES: dict[str, dict] = {
         "pg_types":   ["bigint",   "text"],
     },
     "page_restrictions": {
-        # MW: pr_page, pr_type, pr_level, pr_cascade, pr_user, pr_expiry, pr_id
-        # PG: pr_id, pr_page, pr_type, pr_level, pr_cascade, pr_expiry  (no pr_user)
-        "mysql_cols": ["pr_page", "pr_type", "pr_level", "pr_cascade", "pr_user", "pr_expiry", "pr_id"],
+        # 20260401 dump dropped pr_user (deprecated since the actor refactor).
+        # MW dump now: pr_page, pr_type, pr_level, pr_cascade, pr_expiry, pr_id
+        # PG schema:   pr_id, pr_page, pr_type, pr_level, pr_cascade, pr_expiry
+        "mysql_cols": ["pr_page", "pr_type", "pr_level", "pr_cascade", "pr_expiry", "pr_id"],
         "pg_cols":    ["pr_id", "pr_page", "pr_type", "pr_level", "pr_cascade", "pr_expiry"],
         # produced by the per-table converter — emitted in pg_cols order
         "pg_types":   ["bigint", "bigint", "text",   "text",     "boolean",   "timestamptz"],
@@ -533,12 +534,22 @@ def convert_row(table: str, raw_row: list) -> list:
 def parse_indexes_by_table(indexes_sql: str) -> dict[str, list[tuple[str, str]]]:
     """Return {table_name: [(index_name, full_create_stmt), ...]}.
 
-    Naive but sufficient: split on `;`, look at each `CREATE INDEX ...`
-    statement, and pluck the index name + the table name.
+    Strips psql metacommands (\\set, \\echo, etc.) before parsing — psycopg
+    only understands SQL, and schema/indexes.sql contains a `\\set ON_ERROR_STOP on`
+    at the top that would otherwise be glued onto the first CREATE INDEX
+    statement during the `;`-split and crash on cur.execute().
     """
+    cleaned_lines = []
+    for line in indexes_sql.splitlines():
+        s = line.lstrip()
+        # Drop psql backslash metacommands (whole-line only — none mid-statement).
+        if s.startswith("\\"):
+            continue
+        cleaned_lines.append(line)
+    cleaned = "\n".join(cleaned_lines)
+
     out: dict[str, list[tuple[str, str]]] = {}
-    # statements end at ';' on its own line; safer to split on ';\n'
-    stmts = [s.strip() for s in indexes_sql.split(";")]
+    stmts = [s.strip() for s in cleaned.split(";")]
     pat = re.compile(
         r"CREATE\s+(?:UNIQUE\s+)?INDEX(?:\s+IF\s+NOT\s+EXISTS)?\s+"
         r"(\w+)\s+ON\s+(\w+)",
