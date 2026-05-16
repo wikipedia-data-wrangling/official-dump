@@ -135,8 +135,15 @@ class ActorResolver:
     ids here. Cache is bounded by ``max_size`` with LRU eviction.
     """
 
-    def __init__(self, conn: psycopg.Connection, max_size: int = 1_000_000):
-        self.conn = conn
+    def __init__(self, dsn: str, max_size: int = 1_000_000):
+        # Owns a dedicated autocommit connection. Critical: do NOT share the
+        # worker's main connection. With BATCH_SIZE=50_000 the main connection
+        # holds a long-lived implicit transaction per batch, and any actor
+        # INSERT done inside that transaction locks the (actor_user,
+        # actor_name) row until commit — which under --workers 2 causes the
+        # other worker to block on the same key for many seconds per batch.
+        # Autocommit per actor write releases the lock immediately.
+        self.conn = psycopg.connect(dsn, autocommit=True)
         self.max_size = max_size
         # Use OrderedDict for cheap LRU.
         from collections import OrderedDict
@@ -211,6 +218,12 @@ class ActorResolver:
         if len(cache) > self.max_size:
             cache.popitem(last=False)
         return actor_id
+
+    def close(self) -> None:
+        try:
+            self.conn.close()
+        except Exception:
+            pass
 
 
 # ---------------------------------------------------------------------------
@@ -393,33 +406,40 @@ def load_one_file(
             "elapsed_sec": elapsed,
         }
 
-    with psycopg.connect(PG_SERVICE) as conn:
-        # Per-session perf knobs.
-        with conn.cursor() as cur:
-            cur.execute("SET LOCAL synchronous_commit = OFF")
-            cur.execute("SET LOCAL maintenance_work_mem = '2GB'")
-            cur.execute("SET LOCAL work_mem = '256MB'")
-        actor = ActorResolver(conn)
+    # Dedicated actor connection (autocommit) — see ActorResolver docstring.
+    actor = ActorResolver(PG_SERVICE)
+    try:
+        with psycopg.connect(PG_SERVICE) as conn:
+            # Per-session perf knobs (apply to every batch's implicit txn
+            # via SET, not SET LOCAL — SET LOCAL would reset on each commit
+            # and the next batch would lose synchronous_commit=OFF).
+            with conn.cursor() as cur:
+                cur.execute("SET synchronous_commit = OFF")
+                cur.execute("SET maintenance_work_mem = '2GB'")
+                cur.execute("SET work_mem = '256MB'")
+            conn.commit()
 
-        batch: list[RevisionRow] = []
-        last_logged = 0
-        for row in parse_file(path, actor, stats, limit=limit):
-            batch.append(row)
-            if len(batch) >= BATCH_SIZE:
+            batch: list[RevisionRow] = []
+            last_logged = 0
+            for row in parse_file(path, actor, stats, limit=limit):
+                batch.append(row)
+                if len(batch) >= BATCH_SIZE:
+                    copy_batch(conn, batch)
+                    conn.commit()
+                    batch.clear()
+                if stats.revisions_loaded - last_logged >= PROGRESS_EVERY:
+                    logger.info(
+                        "[%s] %d revisions loaded (%.0f rev/s)",
+                        path.name, stats.revisions_loaded,
+                        stats.revisions_loaded / max(time.time() - t0, 1e-6),
+                    )
+                    last_logged = stats.revisions_loaded
+            if batch:
                 copy_batch(conn, batch)
                 conn.commit()
                 batch.clear()
-            if stats.revisions_loaded - last_logged >= PROGRESS_EVERY:
-                logger.info(
-                    "[%s] %d revisions loaded (%.0f rev/s)",
-                    path.name, stats.revisions_loaded,
-                    stats.revisions_loaded / max(time.time() - t0, 1e-6),
-                )
-                last_logged = stats.revisions_loaded
-        if batch:
-            copy_batch(conn, batch)
-            conn.commit()
-            batch.clear()
+    finally:
+        actor.close()
 
     elapsed = time.time() - t0
     logger.info(
