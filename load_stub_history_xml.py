@@ -144,6 +144,14 @@ class ActorResolver:
         # other worker to block on the same key for many seconds per batch.
         # Autocommit per actor write releases the lock immediately.
         self.conn = psycopg.connect(dsn, autocommit=True)
+        # Async commit: actor inserts are idempotent (ON CONFLICT) and the
+        # in-memory cache is rebuilt from scratch on every loader restart,
+        # so losing a fsync window costs nothing. Without this, every cache
+        # miss adds a ~5 ms WAL fsync — at ~10 % miss rate per worker that
+        # was capping combined throughput at ~2 k rev/s. With it, the actor
+        # path drops out of the critical timeline almost entirely.
+        with self.conn.cursor() as cur:
+            cur.execute("SET synchronous_commit = OFF")
         self.max_size = max_size
         # Use OrderedDict for cheap LRU.
         from collections import OrderedDict
