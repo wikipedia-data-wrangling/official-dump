@@ -59,6 +59,7 @@ import dataclasses
 import datetime as dt
 import gzip
 import logging
+import re
 import time
 from concurrent.futures import ProcessPoolExecutor, as_completed
 from pathlib import Path
@@ -417,8 +418,17 @@ def load_one_file(
 # Top-level orchestration
 # ---------------------------------------------------------------------------
 
+_STUB_PART_RE = re.compile(r"enwiki-20260401-stub-meta-history\d+\.xml\.gz$")
+
+
 def discover_files() -> list[Path]:
-    files = sorted(DUMP_XML_DIR.glob(STUB_HISTORY_GLOB))
+    # Skip `stub-meta-history.xml.gz` (the ~115 GiB recombined monolith) —
+    # the parallel loader works on the 27 numbered parts, and processing
+    # the monolith alongside them would double every revision.
+    files = sorted(
+        p for p in DUMP_XML_DIR.glob(STUB_HISTORY_GLOB)
+        if _STUB_PART_RE.search(p.name)
+    )
     return files
 
 

@@ -22,6 +22,7 @@ import argparse
 import datetime as dt
 import hashlib
 import json
+import re
 import sys
 import threading
 import time
@@ -455,9 +456,18 @@ def select_files(manifest_index: dict[str, dict],
     selected.extend(PHASE_1B_XML)
 
     if phase >= 2:
+        # The manifest publishes both a single recombined
+        # `stub-meta-history.xml.gz` (~115 GiB) AND the 27 split parts
+        # `stub-meta-history{1..27}.xml.gz` (~110 GiB total) — same content.
+        # We want only the parts (the Phase 2 loader runs them in parallel
+        # via --workers; the monolith would double every revision and waste
+        # ~115 GiB of disk on the same bytes).
+        stub_part_re = re.compile(
+            rf"^{re.escape(PHASE_2_XML_PREFIX)}\d+\.xml\.gz$"
+        )
         stubs = sorted(
             f for f in manifest_index
-            if f.startswith(PHASE_2_XML_PREFIX) and f.endswith(".xml.gz")
+            if stub_part_re.match(f)
         )
         selected.extend(stubs)
 
