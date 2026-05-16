@@ -141,10 +141,19 @@ class ActorResolver:
         # Use OrderedDict for cheap LRU.
         from collections import OrderedDict
         self._cache: "OrderedDict[tuple[Optional[int], bytes], int]" = OrderedDict()
-        # Pre-prepared statements
-        self._sel = (
+        # SELECT variants. We deliberately split on user_id is None / not None
+        # because `actor_user IS NOT DISTINCT FROM $1` is NOT sargable against
+        # the (actor_user, actor_name) btree — Postgres falls back to a
+        # parallel seq scan of all 51 M+ rows (~1.4 s/lookup at the post-
+        # Phase-1b warm state). The split-predicate forms below both hit the
+        # index in ~1 ms.
+        self._sel_uid = (
             "SELECT actor_id FROM actor "
-            "WHERE actor_user IS NOT DISTINCT FROM %s AND actor_name = %s"
+            "WHERE actor_user = %s AND actor_name = %s"
+        )
+        self._sel_anon = (
+            "SELECT actor_id FROM actor "
+            "WHERE actor_user IS NULL AND actor_name = %s"
         )
         self._ins = (
             "INSERT INTO actor (actor_user, actor_name) VALUES (%s, %s) "
@@ -167,20 +176,36 @@ class ActorResolver:
             cache.move_to_end(key)
             return hit
         with self.conn.cursor() as cur:
-            cur.execute(self._ins, (user_id, name))
-            row = cur.fetchone()
-            if row is not None:
-                actor_id = row[0]
+            # Try SELECT first. Phase 2 starts with ~51 M actors already in
+            # the table from Phase 1b, so the vast majority of resolutions
+            # are hits — running the SELECT first avoids the cost of an
+            # INSERT...ON CONFLICT round-trip in the common case.
+            if user_id is None:
+                cur.execute(self._sel_anon, (name,))
             else:
-                # Conflict — another writer beat us (or hit it before us).
-                cur.execute(self._sel, (user_id, name))
-                got = cur.fetchone()
-                if got is None:
-                    raise RuntimeError(
-                        f"actor row vanished after ON CONFLICT for "
-                        f"(actor_user={user_id!r}, actor_name={name!r})"
-                    )
+                cur.execute(self._sel_uid, (user_id, name))
+            got = cur.fetchone()
+            if got is not None:
                 actor_id = got[0]
+            else:
+                cur.execute(self._ins, (user_id, name))
+                row = cur.fetchone()
+                if row is not None:
+                    actor_id = row[0]
+                else:
+                    # ON CONFLICT fired between our SELECT and INSERT —
+                    # another writer raced us. Re-SELECT to fetch their id.
+                    if user_id is None:
+                        cur.execute(self._sel_anon, (name,))
+                    else:
+                        cur.execute(self._sel_uid, (user_id, name))
+                    got = cur.fetchone()
+                    if got is None:
+                        raise RuntimeError(
+                            f"actor row vanished after ON CONFLICT for "
+                            f"(actor_user={user_id!r}, actor_name={name!r})"
+                        )
+                    actor_id = got[0]
         cache[key] = actor_id
         cache.move_to_end(key)
         if len(cache) > self.max_size:
