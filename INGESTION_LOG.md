@@ -73,14 +73,25 @@ No freeze snapshots exist yet (`snapshots/` not created); a sanity-only
   `load_stub_history_20260516_194714.log`. Indexes dropped + TRUNCATE
   CASCADE completed at 19:47:14. Workers spinning up against the 27
   parts in `--workers 2` mode.
-- **Performance caveat** to watch: this loader uses the per-row
-  `INSERT ... ON CONFLICT ... RETURNING actor_id` pattern for the shared
-  `actor` table (with an LRU per-process), **not** the batched
-  `resolve_batch` optimization that rescued Phase 1b. Should be OK
-  because revisions are heavily skewed toward a small set of high-edit
-  editors (high cache hit rate), unlike the `newusers` log events that
-  destroyed Phase 1b's pre-optimisation throughput. If it crawls,
-  backport the batched pattern.
+- **Performance caveat hit immediately** — first `--workers 2` run did
+  collapse, but for a different reason than the Phase 1b post-mortem
+  predicted. The `ActorResolver` SELECT fallback used
+  `actor_user IS NOT DISTINCT FROM $1` (so NULL anon and integer user-id
+  could share one query), but **that operator is not sargable against
+  the `(actor_user, actor_name)` btree** — Postgres planned a parallel
+  seq scan over all 51 M+ Phase-1b actors at **1,439 ms per lookup**
+  (measured via EXPLAIN ANALYZE). Workers sat at near-0% CPU waiting
+  on PG.
+- **Fix in `539a98b`**: split the SELECT into two prepared statements
+  (`actor_user = $1 …` for registered, `actor_user IS NULL …` for
+  anon) — both forms hit the index in ~0.2 ms / ~4 ms. Also flipped to
+  SELECT-then-INSERT (Phase 2 starts at 51 M actors, so the common case
+  is a hit; the prior INSERT-then-fallback wasted a round-trip per
+  resolution). Smoke-tested against the real DB before restart.
+- Loader restarted at 19:50:27; first worker immediately CPU-bound at
+  ~81 %, second worker periodically blocking on the unique-constraint
+  lock when both try to insert the same new actor (expected; resolves
+  in milliseconds).
 
 ### 2026-05-16 (morning) — Phase 1b complete
 
@@ -175,11 +186,12 @@ No freeze snapshots exist yet (`snapshots/` not created); a sanity-only
   the loader is interrupted, indexes stay dropped until a clean run
   finishes. Prefer to let it finish; otherwise rebuild manually from
   [schema/indexes.sql](schema/indexes.sql) (revision-* entries only).
-- **Loader does per-row `actor` INSERTs**, not the batched `resolve_batch`
-  pattern from the Phase 1b post-mortem. Likely fine because of the
-  high-skew editor distribution, but watch the rows/s figure once the
-  first progress line lands. If it sits below ~5 k rows/s sustained, kill
-  and backport the batch pattern before letting it grind for days.
+- **Watch the rows/s figure once the first progress line lands.** With
+  the sargability fix in `539a98b`, expectations: ~5–15 k rev/s per
+  worker depending on cache-hit ratio. If it sits below ~2 k rev/s
+  sustained, the per-row resolver may still be the bottleneck and a
+  backport of Phase 1b's batched `resolve_batch` (TEMP table + JOIN) is
+  the next escalation.
 
 ## Related: API-side collection (sibling repo)
 
