@@ -6,7 +6,7 @@ locked decisions, schema rationale); read **this file** for *where things
 actually stand right now*. This supersedes the dated "Status snapshot —
 2026-05-09" section at the bottom of the plan.
 
-Last updated: **2026-05-16 19:50**
+Last updated: **2026-05-16 19:58**
 
 ---
 
@@ -88,10 +88,42 @@ No freeze snapshots exist yet (`snapshots/` not created); a sanity-only
   SELECT-then-INSERT (Phase 2 starts at 51 M actors, so the common case
   is a hit; the prior INSERT-then-fallback wasted a round-trip per
   resolution). Smoke-tested against the real DB before restart.
-- Loader restarted at 19:50:27; first worker immediately CPU-bound at
-  ~81 %, second worker periodically blocking on the unique-constraint
-  lock when both try to insert the same new actor (expected; resolves
-  in milliseconds).
+- Loader restarted at 19:50:27 with the sargability fix. Worker 1
+  immediately CPU-bound at ~81 %, but the run stalled again after only
+  100 k revisions inserted. **Second root cause**: inter-worker lock
+  contention. Each worker held a long-lived implicit transaction across
+  one entire `BATCH_SIZE=50 000` batch (~10 s), and any actor INSERT
+  done inside that transaction locked the `(actor_user, actor_name)`
+  row until commit. The sibling worker's INSERT…ON CONFLICT on any
+  overlapping key blocked on `Lock: transactionid` for the full batch
+  duration. `pg_blocking_pids()` showed worker B blocked by worker A's
+  `idle in transaction` connection on the actor INSERT.
+- **Fix in `0bf5846`**: `ActorResolver` now owns its OWN psycopg
+  connection with `autocommit=True`, separate from the worker's main
+  COPY connection. Actor inserts commit in ms; the COPY connection
+  keeps its long-lived per-batch transaction. Also flipped
+  `SET LOCAL synchronous_commit = OFF` → plain `SET` on the main
+  connection, because LOCAL settings reset on each commit and the
+  perf knobs were silently being lost after the very first batch.
+- Loader restarted at 19:53:18 with the lock fix. Both workers active,
+  no transactionid waits, but combined throughput capped at **~2 k
+  rev/s** — much less than expected. **Third root cause**: each actor
+  INSERT in the autocommit connection triggered a WAL fsync (~5 ms).
+  At ~10 % cache miss rate per worker that was the dominant cost.
+- **Fix in `1c4ee7f`**: `SET synchronous_commit = OFF` on the
+  ActorResolver's autocommit connection too. Safe — actor inserts are
+  idempotent (`ON CONFLICT`) and the in-memory LRU is rebuilt from
+  scratch on each loader start, so losing a fsync window costs
+  nothing on a crash.
+- Loader restarted at 19:56:37 with all four fixes. Cold-start rates
+  per worker hit ~3.1 k / 2.7 k rev/s (combined ~5.85 k) — **~3× the
+  pre-fix combined rate**. Marginal rate gradually drifted toward
+  ~1.7 k/worker over the first few hundred-k revisions; LRU is likely
+  filling up and miss rate is rising. Combined ~3.5 k rev/s
+  sustained — still above threshold. For 1.5 B revisions that's an
+  ETA of ~5 days. Will monitor; if it drops below ~3 k combined,
+  consider raising `ActorResolver.max_size` from 1 M or backporting
+  the Phase 1b TEMP-table batched resolver.
 
 ### 2026-05-16 (morning) — Phase 1b complete
 
