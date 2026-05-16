@@ -1,0 +1,210 @@
+
+=== connection ===
+ current_database | current_user |         current_setting          
+------------------+--------------+----------------------------------
+ wiki20260401     | simone       | 18.3 (Ubuntu 18.3-1.pgdg22.04+1)
+(1 row)
+
+
+=== row counts per table ===
+        tbl         |   count   
+--------------------+-----------
+ change_tag_def     |       335
+ revision           |         0
+ user_former_groups |     22004
+ protected_titles   |     58920
+ user_groups        |    103060
+ page_restrictions  |    192836
+ actor              |  51427383
+ page               |  65401140
+ logging            | 157840090
+ change_tag         | 546583142
+(10 rows)
+
+
+=== page: counts by namespace ===
+ page_namespace |  pages   
+----------------+----------
+              0 | 18999718
+              1 | 10368883
+              2 |  4594123
+              3 | 20617958
+              4 |  1544995
+              5 |   213160
+              6 |  1008166
+              7 |   898927
+              8 |     2619
+              9 |     2259
+             10 |   887032
+             11 |   615078
+             12 |     2861
+             13 |     1707
+             14 |  2626970
+             15 |  2384374
+            100 |   105151
+            101 |    43366
+            118 |   312982
+            119 |   133081
+            126 |     2662
+            127 |      163
+            710 |     2179
+            711 |      221
+            828 |    19157
+            829 |    13196
+           1728 |      117
+           1729 |       35
+(28 rows)
+
+
+=== page_restrictions: protection types and levels ===
+ pr_type |     pr_level      |   n   
+---------+-------------------+-------
+ edit    | autoconfirmed     | 67147
+ edit    | extendedconfirmed | 15461
+ edit    | sysop             |  9856
+ edit    | templateeditor    |  9031
+ move    | autoconfirmed     | 39438
+ move    | extendedconfirmed | 13183
+ move    | sysop             | 30113
+ move    | templateeditor    |  8397
+ upload  | autoconfirmed     |    36
+ upload  | extendedconfirmed |     6
+ upload  | sysop             |   167
+ upload  | templateeditor    |     1
+(12 rows)
+
+
+=== protected_titles: creation-protection levels (relevant to RFPP analysis) ===
+  pt_create_perm   |   n   
+-------------------+-------
+ autoconfirmed     |  2636
+ editprotected     |     3
+ editsemiprotected |     1
+ extendedconfirmed |  3434
+ sysop             | 52728
+ templateeditor    |   118
+(6 rows)
+
+
+=== logging: event counts by log_type ===
+      log_type       |    n     
+---------------------+----------
+ newusers            | 51517337
+ block               | 28585103
+ create              | 22216673
+ delete              | 18606232
+ move                |  9228908
+ patrol              |  7684751
+ upload              |  5268629
+ thanks              |  4542344
+ pagetriage-curation |  4147149
+ review              |  2518642
+ growthexperiments   |   900138
+ protect             |   842471
+ renameuser          |   687252
+ articlefeedbackv5   |   497197
+ rights              |   143404
+ merge               |   104918
+ pagetriage-deletion |   103305
+ pagetriage-copyvio  |    68057
+ moodbar             |    59451
+ massmessage         |    29339
+ stable              |    29227
+ eparticle           |    18128
+ import              |    17176
+ student             |    13580
+ course              |     5212
+ contentmodel        |     1389
+ online              |     1072
+ instructor          |      724
+ timedmediahandler   |      643
+ institution         |      425
+ campus              |      391
+ managetags          |      212
+ gather              |      146
+ gblblock            |      136
+ tag                 |       93
+ gblrename           |       81
+ globalauth          |       64
+ lock                |       51
+ close               |       22
+ gblrights           |       16
+ usermerge           |        2
+(41 rows)
+
+
+=== logging: protect/unprotect/move_prot events by year ===
+  yr  | log_type |   n   
+------+----------+-------
+ 2004 | protect  |   129
+ 2005 | protect  | 15342
+ 2006 | protect  | 43521
+ 2007 | protect  | 64451
+ 2008 | protect  | 81222
+ 2009 | protect  | 48727
+ 2010 | protect  | 53173
+ 2011 | protect  | 45358
+ 2012 | protect  | 40018
+ 2013 | protect  | 32531
+ 2014 | protect  | 25538
+ 2015 | protect  | 32984
+ 2016 | protect  | 34483
+ 2017 | protect  | 41298
+ 2018 | protect  | 47923
+ 2019 | protect  | 35896
+ 2020 | protect  | 32238
+ 2021 | protect  | 38341
+ 2022 | protect  | 28475
+ 2023 | protect  | 28623
+ 2024 | protect  | 33549
+ 2025 | protect  | 31470
+ 2026 | protect  |  7181
+(23 rows)
+
+
+=== logging: sample of recent protect events with parsed log_params ===
+     log_timestamp      | log_namespace |         title         |                                                                                                                                                                                                    log_params                                                                                                                                                                                                     
+------------------------+---------------+-----------------------+-------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------
+ 2026-04-02 18:22:43+01 |             3 | Feedmepaperr          | {"details": {"0": {"type": "edit", "level": "autoconfirmed", "expiry": "20260404172243", "cascade": false}}, "4::description": "‎[edit=autoconfirmed] (expires 17:22, 4 April 2026 (UTC))", "5:bool:cascade": false, "associated_rev_id": 1346749650}
+ 2026-04-02 18:22:42+01 |             0 | Apple Watch           | {"details": {"0": {"type": "edit", "level": "autoconfirmed", "expiry": "20260409172238", "cascade": false}, "1": {"type": "move", "level": "autoconfirmed", "expiry": "20260409172238", "cascade": false}}, "4::description": "‎[edit=autoconfirmed] (expires 17:22, 9 April 2026 (UTC))‎[move=autoconfirmed] (expires 17:22, 9 April 2026 (UTC))", "5:bool:cascade": false, "associated_rev_id": 1346749648}
+ 2026-04-02 18:20:48+01 |             1 | Keir Starmer          | {"details": {"0": {"type": "edit", "level": "autoconfirmed", "expiry": "20260409172047", "cascade": false}, "1": {"type": "move", "level": "autoconfirmed", "expiry": "20260409172047", "cascade": false}}, "4::description": "‎[edit=autoconfirmed] (expires 17:20, 9 April 2026 (UTC))‎[move=autoconfirmed] (expires 17:20, 9 April 2026 (UTC))", "5:bool:cascade": false, "associated_rev_id": 1346749338}
+ 2026-04-02 18:19:26+01 |             0 | Operation Dawn (1967) | {"details": {"0": {"type": "edit", "level": "extendedconfirmed", "expiry": "infinity", "cascade": false}, "1": {"type": "move", "level": "extendedconfirmed", "expiry": "infinity", "cascade": false}}, "4::description": "‎[edit=extendedconfirmed] (indefinite)‎[move=extendedconfirmed] (indefinite)", "5:bool:cascade": false, "associated_rev_id": 1346749113}
+ 2026-04-02 18:19:16+01 |             0 | 147 Squadron (Israel) | {"details": {"0": {"type": "edit", "level": "extendedconfirmed", "expiry": "infinity", "cascade": false}, "1": {"type": "move", "level": "extendedconfirmed", "expiry": "infinity", "cascade": false}}, "4::description": "‎[edit=extendedconfirmed] (indefinite)‎[move=extendedconfirmed] (indefinite)", "5:bool:cascade": false, "associated_rev_id": 1346749087}
+(5 rows)
+
+
+=== revision: total + by year ===
+ yr | revisions 
+----+-----------
+(0 rows)
+
+
+=== actor: registered vs anon ===
+ registered |  anon  |  total   
+------------+--------+----------
+   51124222 | 303161 | 51427383
+(1 row)
+
+
+=== user_groups: current group membership counts ===
+         ug_group         | members 
+--------------------------+---------
+ extendedconfirmed        |   79065
+ reviewer                 |    8208
+ rollbacker               |    7032
+ autoreviewer             |    3575
+ patroller                |     870
+ sysop                    |     810
+ ipblock-exempt           |     690
+ confirmed                |     527
+ extendedmover            |     457
+ temporary-account-viewer |     403
+ filemover                |     390
+ bot                      |     306
+ templateeditor           |     210
+ eventcoordinator         |     155
+ abusefilter              |     140
+(15 rows)
+
+
+=== cross-table: top admins by protect-action count ===
