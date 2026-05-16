@@ -6,7 +6,7 @@ locked decisions, schema rationale); read **this file** for *where things
 actually stand right now*. This supersedes the dated "Status snapshot —
 2026-05-09" section at the bottom of the plan.
 
-Last updated: **2026-05-16 09:30**
+Last updated: **2026-05-16 19:50**
 
 ---
 
@@ -17,7 +17,7 @@ Last updated: **2026-05-16 09:30**
 | **0** — host & schema | PG18 cluster, 11-table schema | — | — | ✅ **done** |
 | **1a** — native SQL dumps | page metadata, restrictions, tags, user groups | ✅ 7 files, 6.9 GB | `page`, `page_restrictions`, `protected_titles`, `user_groups`, `user_former_groups`, `change_tag`, `change_tag_def` | ✅ **done** |
 | **1b** — protection log XML | historical log events | ✅ recombined `pages-logging.xml.gz`, 6.69 GB | `logging` (+ shared `actor`) | ✅ **done** |
-| **2** — stub-meta-history XML | revision metadata (editor–page–time) | ❌ not downloaded | `revision`, `actor` | ⬜ not started |
+| **2** — stub-meta-history XML | revision metadata (editor–page–time) | ✅ 27 parts, 113 GB on disk, SHA-1 verified | `revision`, `actor` | 🟡 **load running now** |
 | **3** — pages-meta-history XML | revision wikitext | ❌ not downloaded | `revision_text` | ⬜ not started |
 | **4** — freeze / verify | pg_dump + `key_figures` snapshots | — | — | ⬜ not started |
 
@@ -46,7 +46,43 @@ No freeze snapshots exist yet (`snapshots/` not created); a sanity-only
 
 ## Activity log (most recent first)
 
-### 2026-05-16 — Phase 1b complete
+### 2026-05-16 (evening) — Phase 2 download done; loader started
+
+- Phase 2 download finished cleanly during the day. All 27
+  `stub-meta-history{1..27}.xml.gz` parts on disk under
+  `/media/simone/ssd1/wikidumps/20260401/xml/` at expected sizes; SHA-1
+  re-verified end-to-end via `download_dumps.py --phase 2` (all 35 files
+  report `OK already complete`). Disk usage rose 153 GB → 266 GB
+  (+113 GB compressed, matches plan).
+- **Bug caught pre-download**: the Phase 2 file-selector regex matched
+  both the 115 GiB recombined monolith *and* the 27 split parts — same
+  bytes packaged two ways. Would have wasted ~115 GiB and made the
+  loader double-insert every revision (PK collisions at best). Fixed in
+  `9c09c5c`: tightened both `download_dumps.select_files` and
+  `load_stub_history_xml.discover_files` to require a numeric suffix.
+- **Bug caught at loader start**: first `--workers 2` run aborted on
+  `TRUNCATE revision` with `cannot truncate a table referenced in a
+  foreign key constraint` — schema declares
+  `revision_text.rev_id -> revision.rev_id`. Postgres enforces the FK
+  structurally, not by row count, so the empty `revision_text` didn't
+  save us. Fixed in `5a84920`: `TRUNCATE TABLE revision CASCADE`. Safe
+  because Phase 3 (which fills `revision_text`) runs strictly after
+  Phase 2, and a Phase 2 re-run logically invalidates any
+  `revision_text` rows anyway.
+- Loader restarted in **tmux session `stub-load`**, log
+  `load_stub_history_20260516_194714.log`. Indexes dropped + TRUNCATE
+  CASCADE completed at 19:47:14. Workers spinning up against the 27
+  parts in `--workers 2` mode.
+- **Performance caveat** to watch: this loader uses the per-row
+  `INSERT ... ON CONFLICT ... RETURNING actor_id` pattern for the shared
+  `actor` table (with an LRU per-process), **not** the batched
+  `resolve_batch` optimization that rescued Phase 1b. Should be OK
+  because revisions are heavily skewed toward a small set of high-edit
+  editors (high cache hit rate), unlike the `newusers` log events that
+  destroyed Phase 1b's pre-optimisation throughput. If it crawls,
+  backport the batched pattern.
+
+### 2026-05-16 (morning) — Phase 1b complete
 
 - Loader hit `DONE in 139178.6s` at **08:25:03** (run started 17:45 on
   05-14, ~38.7 h wall time). Final tally: `seen=157,840,101
@@ -114,30 +150,36 @@ No freeze snapshots exist yet (`snapshots/` not created); a sanity-only
 
 ## What's next
 
-1. **Phase 2 download + load** — `stub-meta-history*.xml.gz` (~225 GB, 27
-   parts, multi-day). Not yet downloaded. Run via `./run_pipeline.sh phase2`
-   inside a fresh `tmux` session. Loader is `load_stub_history_xml.py`;
-   targets `revision` (currently 0 rows) and continues writing into the
-   shared `actor`.
-2. **`freeze2`** — pg_dump + `key_figures_phase2.txt` + git tag
-   `phase2-frozen`. See the Phase 4a checklist in
-   [data_collection_plan.md](data_collection_plan.md).
+1. **Let Phase 2 loader finish.** Watch via
+   `tmux attach -t stub-load` or
+   `tail -f load_stub_history_20260516_194714.log`. On a clean finish it
+   re-creates 3 `revision` indexes (the `(rev_page, rev_timestamp,
+   rev_actor)` composite is the load-bearing one for the hyperevent
+   model) and `ANALYZE`s `revision`. Then run
+   [key_figures.sql](key_figures.sql) and diff against
+   `key_figures_post_phase1b_20260516.txt` — `revision` should jump from
+   0 to ~1.5–2 B rows, `actor` should grow from 51.4 M as revision
+   contributors are added.
+2. **`freeze2`** — `./run_pipeline.sh freeze2`: `pg_dump` (custom format)
+   + `key_figures_phase2.txt` + git tag `phase2-frozen`. See the Phase 4a
+   checklist in [data_collection_plan.md](data_collection_plan.md).
 3. **Phase 3** — `pages-meta-history*.xml.7z` wikitext (~270 GB), only if
    the analysis needs revision text. Then `freeze3`.
 
 ## Open issues / watch-outs
 
 - **`actor` is shared** between the Phase 1b and Phase 2 loaders — never
-  `TRUNCATE` it; both use `ON CONFLICT` dedup. The Phase 2 loader will
-  start from a 51.4 M-row baseline rather than empty.
-- **Phase 2 download is the largest cheap step**: ~225 GB compressed over
-  27 parts at WMF's 2-concurrent-connection cap. Plan for it to finish
-  overnight at best, multi-day at worst depending on mirror speed; the
-  downloader is resume-aware (`Range: bytes=N-`) so an interrupted run
-  picks up cleanly.
-- Working tree is clean as of the start of today's session
-  (`load_logging_xml.py` optimisation + INGESTION_LOG.md baseline are
-  already in commit `4dd6931`).
+  `TRUNCATE` it; both use `ON CONFLICT` dedup. The Phase 2 loader started
+  from the 51.4 M-row Phase-1b baseline.
+- **`revision` is unindexed** for the duration of the Phase 2 load. If
+  the loader is interrupted, indexes stay dropped until a clean run
+  finishes. Prefer to let it finish; otherwise rebuild manually from
+  [schema/indexes.sql](schema/indexes.sql) (revision-* entries only).
+- **Loader does per-row `actor` INSERTs**, not the batched `resolve_batch`
+  pattern from the Phase 1b post-mortem. Likely fine because of the
+  high-skew editor distribution, but watch the rows/s figure once the
+  first progress line lands. If it sits below ~5 k rows/s sustained, kill
+  and backport the batch pattern before letting it grind for days.
 
 ## Related: API-side collection (sibling repo)
 
