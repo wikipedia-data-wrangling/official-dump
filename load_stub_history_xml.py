@@ -470,10 +470,18 @@ def recreate_indexes(conn: psycopg.Connection) -> None:
 
 
 def truncate_revision(conn: psycopg.Connection) -> None:
-    """TRUNCATE ``revision`` (do NOT touch actor — shared with other loaders)."""
+    """TRUNCATE ``revision`` (do NOT touch actor — shared with other loaders).
+
+    CASCADE is required because ``revision_text.rev_id`` has a FK to
+    ``revision.rev_id`` (declared in schema/revision_text.sql). The CASCADE
+    propagates the TRUNCATE to ``revision_text`` — which is fine here:
+    Phase 3 (which populates revision_text) always runs after Phase 2, so
+    any revision_text rows would already be invalid once revision is reset.
+    A re-run of Phase 2 implies a re-run of Phase 3.
+    """
     with conn.cursor() as cur:
-        cur.execute("TRUNCATE TABLE revision")
-        logger.info("TRUNCATEd revision")
+        cur.execute("TRUNCATE TABLE revision CASCADE")
+        logger.info("TRUNCATEd revision (CASCADE -> revision_text)")
     conn.commit()
 
 
