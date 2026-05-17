@@ -6,7 +6,7 @@ locked decisions, schema rationale); read **this file** for *where things
 actually stand right now*. This supersedes the dated "Status snapshot —
 2026-05-09" section at the bottom of the plan.
 
-Last updated: **2026-05-16 19:58**
+Last updated: **2026-05-17 19:40**
 
 ---
 
@@ -45,6 +45,30 @@ No freeze snapshots exist yet (`snapshots/` not created); a sanity-only
 ---
 
 ## Activity log (most recent first)
+
+### 2026-05-17 — Phase 2 loader killed by apt upgrade; restarted from scratch
+
+- Loader ran cleanly from 19:56:37 on 2026-05-16 for ~100 min,
+  reaching **21,250,000 revisions** at a sustained ~3.8 k combined
+  rev/s before dying with
+  `psycopg.errors.AdminShutdown: terminating connection due to
+  administrator command`.
+- Root cause: `dpkg.log` shows `postgresql-18` was upgraded from
+  18.3 → **18.4** (`18.4-1.pgdg22.04+1`) at 21:34:31 BST; the package
+  post-install restarted the service at 21:32:30, which terminated
+  all client connections. `unattended-upgrades.log` does NOT show
+  this — PGDG is outside Ubuntu's security-only auto-update scope —
+  so the upgrade was triggered by GNOME Software auto-update or a
+  manual `apt upgrade`. PG 18.3 → 18.4 is a point release, so the
+  loaded data is untouched.
+- **Mitigation for the next run**: optionally
+  `sudo apt-mark hold postgresql-18 postgresql-18-jit postgresql-client-18 postgresql`
+  to block PGDG upgrades during the load; `apt-mark unhold` to
+  release after `freeze2`. Not done automatically (system-level
+  change requires explicit auth).
+- Loader restarted at **19:40 on 2026-05-17** in tmux `stub-load`,
+  log `load_stub_history_20260517_194000.log`. TRUNCATE wiped the
+  21 M revisions; starting from scratch.
 
 ### 2026-05-16 (evening) — Phase 2 download done; loader started
 
