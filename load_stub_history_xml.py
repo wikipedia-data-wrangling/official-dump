@@ -347,24 +347,76 @@ COPY_COLUMNS = (
 )
 
 
+_STAGE_TABLE_DDL = """
+    CREATE TEMP TABLE IF NOT EXISTS _rev_stage (
+        rev_id        bigint,
+        rev_page      bigint,
+        rev_actor     bigint,
+        rev_timestamp timestamptz,
+        rev_minor     bool,
+        rev_comment   text,
+        rev_sha1      text,
+        rev_len       bigint,
+        rev_parent_id bigint
+    )
+    ON COMMIT PRESERVE ROWS
+"""
+
+
+def ensure_stage_table(conn: psycopg.Connection) -> None:
+    """Create the per-session UNLOGGED-ish TEMP staging table once.
+
+    Idempotent (`CREATE TEMP TABLE IF NOT EXISTS`); intended to be called
+    once at worker start-of-session before the first copy_batch.
+    """
+    with conn.cursor() as cur:
+        cur.execute(_STAGE_TABLE_DDL)
+
+
 def copy_batch(conn: psycopg.Connection, rows: list[RevisionRow]) -> None:
-    """COPY a batch of RevisionRows into ``revision`` via psycopg's binary COPY."""
+    """COPY a batch of RevisionRows into ``revision`` with ON CONFLICT safety.
+
+    The 20260401 enwiki ``stub-meta-history*.xml.gz`` splits are not strictly
+    disjoint by ``rev_id`` — at least one rev_id (e.g. 711706 for page
+    23639 "Gasoline") appears in multiple split files (observed in files 1
+    and 11). A naive ``COPY ... FROM STDIN`` straight into ``revision``
+    therefore fails the PK constraint when a later worker hits an already-
+    inserted rev_id, killing the loader. The pattern below avoids that
+    cliff: COPY into a per-session temp table, then
+    ``INSERT ... SELECT ... ON CONFLICT (rev_id) DO NOTHING`` from the
+    staging table — duplicates are silently skipped, throughput stays
+    COPY-fast, and the loader is idempotent under re-runs and dump-overlap.
+    """
     if not rows:
         return
     cols = ", ".join(COPY_COLUMNS)
-    sql = f"COPY revision ({cols}) FROM STDIN WITH (FORMAT BINARY)"
-    with conn.cursor() as cur, cur.copy(sql) as cp:
-        # Tell psycopg the column types so it serializes correctly.
-        cp.set_types(
-            ["int8", "int8", "int8", "timestamptz", "bool",
-             "text", "text", "int8", "int8"]
+    with conn.cursor() as cur:
+        # Empty the staging table before the new batch. TRUNCATE on a TEMP
+        # table is metadata-only (no WAL) and cheap.
+        cur.execute("TRUNCATE _rev_stage")
+        # COPY into the staging table (no PK -> no conflicts here).
+        sql = f"COPY _rev_stage ({cols}) FROM STDIN WITH (FORMAT BINARY)"
+        with cur.copy(sql) as cp:
+            cp.set_types(
+                ["int8", "int8", "int8", "timestamptz", "bool",
+                 "text", "text", "int8", "int8"]
+            )
+            for r in rows:
+                cp.write_row((
+                    r.rev_id, r.rev_page, r.rev_actor, r.rev_timestamp,
+                    r.rev_minor, r.rev_comment, r.rev_sha1, r.rev_len,
+                    r.rev_parent_id,
+                ))
+        # Move rows from staging into revision, skipping duplicate rev_ids.
+        # DISTINCT ON guards against intra-batch duplicates (where the
+        # same rev_id appears twice within this batch — rare but possible
+        # at split boundaries); ON CONFLICT guards against cross-batch /
+        # cross-file duplicates.
+        cur.execute(
+            f"INSERT INTO revision ({cols}) "
+            f"SELECT DISTINCT ON (rev_id) {cols} FROM _rev_stage "
+            f"ON CONFLICT (rev_id) DO NOTHING"
         )
-        for r in rows:
-            cp.write_row((
-                r.rev_id, r.rev_page, r.rev_actor, r.rev_timestamp,
-                r.rev_minor, r.rev_comment, r.rev_sha1, r.rev_len,
-                r.rev_parent_id,
-            ))
 
 
 # ---------------------------------------------------------------------------
@@ -425,6 +477,10 @@ def load_one_file(
                 cur.execute("SET synchronous_commit = OFF")
                 cur.execute("SET maintenance_work_mem = '2GB'")
                 cur.execute("SET work_mem = '256MB'")
+            # Create the per-session staging table that copy_batch
+            # COPYs into and then drains into ``revision`` with
+            # ON CONFLICT (rev_id) DO NOTHING.
+            ensure_stage_table(conn)
             conn.commit()
 
             batch: list[RevisionRow] = []
