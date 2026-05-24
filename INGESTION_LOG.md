@@ -6,7 +6,7 @@ locked decisions, schema rationale); read **this file** for *where things
 actually stand right now*. This supersedes the dated "Status snapshot —
 2026-05-09" section at the bottom of the plan.
 
-Last updated: **2026-05-17 19:40**
+Last updated: **2026-05-24 01:55**
 
 ---
 
@@ -45,6 +45,46 @@ No freeze snapshots exist yet (`snapshots/` not created); a sanity-only
 ---
 
 ## Activity log (most recent first)
+
+### 2026-05-24 — Phase 2 UniqueViolation; loader patched + restarted at workers=6
+
+- The 2026-05-17 restart of the loader ran for ~3.3 days and **crashed at
+  21:01:12 on 2026-05-20** with
+  `psycopg.errors.UniqueViolation: duplicate key value violates unique
+  constraint "revision_pkey"`, DETAIL `Key (rev_id)=(711706) already
+  exists`. The exception only surfaced ~3 days later when `status` was
+  checked — `as_completed` had been collecting other workers' results in
+  the background while the failed file's future sat waiting.
+- All 26 *other* files completed cleanly (`done: seen=…` lines for
+  files 1–6, 8–27). File 7's worker hit the duplicate mid-COPY, raised,
+  and the ProcessPoolExecutor pool kept the other workers going. Final
+  DB state at the catch: **1,243,967,331 revision rows** (~83 % of the
+  expected ~1.5 B); indexes still dropped.
+- **Root cause**: the WMF 20260401 `stub-meta-history*.xml.gz` splits
+  are **not strictly disjoint by `rev_id`**. The duplicate rev_id 711706
+  (page 23639 "Gasoline", first revision 2001-09-24) appears in at
+  least two split files (1 and 11; confirmed by `zgrep`). The loader's
+  direct `COPY ... FROM STDIN` into `revision` therefore hit the PK the
+  moment any later worker's batch contained an already-inserted rev_id.
+  The split-disjointness assumption was implicit and undocumented.
+- **Fix in `8ea1b1b`**: `copy_batch` now uses a per-session TEMP
+  staging table `_rev_stage` (no PK). Each batch: `TRUNCATE _rev_stage`
+  → `COPY` into staging → `INSERT INTO revision (...) SELECT DISTINCT
+  ON (rev_id) ... FROM _rev_stage ON CONFLICT (rev_id) DO NOTHING`.
+  DISTINCT ON guards against intra-batch duplicates; ON CONFLICT guards
+  against cross-batch / cross-file duplicates. Loader is now idempotent
+  under both dump-overlap *and* arbitrary re-runs. Smoke-tested against
+  the real DB before the restart.
+- Loader restarted at **01:52 on 2026-05-24** in tmux `stub-load`,
+  `--workers 6` (user-authorized after diagnostic showed 20 cores, 100 %
+  CPU per worker at `--workers 2`, ~21 % overall system utilisation).
+  TRUNCATE wiped the 1.24 B rows; expected wall time at 6 workers:
+  ~28–36 h, assuming sub-linear scaling from the staging-table overhead
+  and any PG-side contention.
+- **Phase 3 download is running in parallel** (`download_dumps.py
+  --phase 3` in tmux `phase3`, started 01:08 by user). Network-bound
+  (~5 MB/s per file), no compete with the CPU/PG-bound loader. Disk at
+  292 GB / 7.3 TB used.
 
 ### 2026-05-17 — Phase 2 loader killed by apt upgrade; restarted from scratch
 
