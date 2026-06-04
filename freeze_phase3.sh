@@ -36,6 +36,11 @@
 set -euo pipefail
 
 # ---- config ----------------------------------------------------------------
+# pg_wrapper (/usr/bin/pg_dump) does not parse libpq conninfo strings, so
+# without this it picks the lowest-installed PG binary and fails against the
+# PG18 server with "aborting because of server version mismatch".
+export PGCLUSTER="18/main"
+
 PG_SERVICE="service=wiki"
 DB_NAME="wiki20260401"
 REPO_DIR="/home/simone/githubRepos/wikipediaData/official-dump"
@@ -162,7 +167,7 @@ step "Running pg_dump --schema-only (custom format) -> ${SNAP_FILE}"
 if [[ "${FORCE}" -eq 1 ]]; then
   rm -f "${SNAP_FILE}"
 fi
-pg_dump -Fc --schema-only --no-owner --no-privileges -d "${DB_NAME}" -f "${SNAP_FILE}"
+pg_dump -Fc --schema-only --no-owner --no-privileges -d "${PG_SERVICE}" -f "${SNAP_FILE}"
 snap_size=$(stat -c '%s' "${SNAP_FILE}")
 step "pg_dump complete. File size: ${snap_size} bytes"
 
