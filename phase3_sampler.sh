@@ -20,11 +20,21 @@ fi
 while true; do
   TS=$(date -u +%Y-%m-%dT%H:%M:%SZ)
 
-  # rows + bytes from Postgres
+  # rows (approximate, from pg_class.reltuples — instant; updated by ANALYZE)
+  # and bytes (pg_total_relation_size — fast metadata lookup, not a scan).
+  # Wrapped in statement_timeout=30s so a stalled query never piles up and
+  # blocks DDL on revision_text (lesson from 2026-06-05: count(*) on the
+  # 6 TB lacie14-resident table took >>5 min, held AccessShareLock, and
+  # blocked the loader's ALTER TABLE DROP CONSTRAINT).
+  # psql emits "SET" on its own line before the SELECT result; take only the
+  # last non-empty line to discard it.
   read -r ROWS BYTES PRETTY <<<"$(PGSERVICE=wiki psql -tAF$'\t' -c \
-    "SELECT count(*), pg_total_relation_size('revision_text'), \
+    "SET statement_timeout='30s'; \
+     SELECT reltuples::bigint, \
+            pg_total_relation_size('revision_text'), \
             pg_size_pretty(pg_total_relation_size('revision_text')) \
-     FROM revision_text;" 2>/dev/null \
+       FROM pg_class WHERE relname='revision_text';" 2>/dev/null \
+    | grep -v '^SET$' | grep -v '^$' | tail -1 \
     || echo $'\t\t')"
   ROWS=${ROWS:-NA}
   BYTES=${BYTES:-NA}
