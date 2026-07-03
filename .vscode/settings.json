@@ -1,3 +1,7 @@
 {
-  "pgsql.connections": []
+  "pgsql.connections": [],
+  "workbench.colorTheme": "Visual Studio Light",
+  "editor.fontWeight": "normal",
+  "window.zoomLevel": 2,
+  "customPresentationMode.backup": {}
 }

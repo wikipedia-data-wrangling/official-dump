@@ -22,10 +22,23 @@ The detailed phase-by-phase plan, locked decisions, and current state-of-play li
 ### Locked infrastructure decisions
 
 - **Run ID `20260401`** — last "Dump complete" enwiki run as of 2026-05-09. The project is a retrospective study, so a fixed snapshot is preferred.
-- **PostgreSQL 18.3**, cluster `main`, port **5434**, encoding **`SQL_ASCII`** (byte-transparent — Wikipedia dumps occasionally contain bytes that strict UTF-8 would reject), locale `C`, dedicated tablespace `wiki_ts`.
-- **All bulk data lives on `/media/simone/ssd1/`**: tablespace at `postgres-wiki/`, raw dumps at `wikidumps/20260401/{sql,xml}/`. The PG cluster catalog itself stays at `/var/lib/postgresql/18/main`.
+- **PostgreSQL 18.3**, cluster `main`, port **5434**, encoding **`SQL_ASCII`** (byte-transparent — Wikipedia dumps occasionally contain bytes that strict UTF-8 would reject), locale `C`. Four tablespaces in active use — see below.
 - **Connect with `psql service=wiki`** (port encoded in `~/.pg_service.conf`). New code should use libpq `service=wiki` rather than hardcoding host/port.
 - Provisioning is reproducible via [setup_postgres18.sh](setup_postgres18.sh) (run as `sudo`); existing PG15/PG16 clusters are left untouched.
+
+### Storage layout (post-hop-2, partitioned)
+
+The data has migrated three times since 2026-05-09 (`ssd1 → lacie14 → lacie10 → lacie14+ssd1`) as the per-drive capacity wasn't sufficient for the full 9+ TB `revision_text`. Current placement:
+
+- **`revision_text` is partitioned** by `rev_id` at boundary 1,000,000,000:
+  - `revision_text_p1` (rev_id < 1B, ~7 TB) on tablespace `wiki_ts_lacie` → `/media/simone/lacie14/postgres-wiki`
+  - `revision_text_p2` (rev_id ≥ 1B, ~2 TB) on tablespace `wiki_ts` → `/media/simone/ssd1/postgres-wiki`
+- **All other tables** (Phase 1 + Phase 2: `revision`, `page`, `actor`, `logging`, `change_tag`, etc.) on tablespace `wiki_ts_lacie` (lacie14).
+- **All PK indexes** on tablespace `wiki_ts_sys` → `/var/lib/postgres-wiki-idx` (NVMe, owned by postgres). PG cluster catalog + WAL also on NVMe at `/var/lib/postgresql/18/main/`.
+- **Tablespace `wiki_ts_lacie10`** → `/media/simone/lacie10/postgres-wiki` exists as **empty reserve** for the planned hop 3 (~40 % likely) if `p1` fills before Phase 3 loading finishes.
+- **Source 7z + SQL dumps** at `/media/simone/lacie14/wikidumps/20260401/{xml,sql}/`.
+
+**Read [docs/STORAGE_LAYOUT.md](docs/STORAGE_LAYOUT.md), [docs/DATA_LOCATION_GUIDE.md](docs/DATA_LOCATION_GUIDE.md), and [docs/STORAGE_MIGRATION_HISTORY.md](docs/STORAGE_MIGRATION_HISTORY.md) before doing anything storage-related** — they're the authoritative tablespace map, per-relation inventory, capacity arithmetic, and the full hop-by-hop history. The earlier "all bulk data on ssd1" guidance in this file's history is obsolete.
 
 ### Pipeline shape
 
@@ -74,7 +87,7 @@ The shared-`actor` invariant is why the loaders deliberately diverge from "TRUNC
 
 - [key_figures.sql](key_figures.sql) is the canonical sentinel script — row counts per table, namespace breakdown, yearly protect-event counts, top admins by protection actions, currently-protected pages joined to their last protect event. Run it before/after any non-trivial change. Ad-hoc throwaway SQL belongs here too.
 - [freeze_phase2.sh](freeze_phase2.sh) and [freeze_phase3.sh](freeze_phase3.sh) implement the Phase 4a/4b handoff checklists from `data_collection_plan.md`: pg_dump (custom format) → `key_figures.sql` snapshot → SHA-1 → append a dated section to `MANIFEST.md` on the SSD. Both refuse to overwrite existing snapshots without `--force`. `freeze_phase3.sh` needs `jq` (for `dumpstatus.json` parsing).
-- The repo has no other test suite. The exception is [test_load_pages_meta_history_xml.py](test_load_pages_meta_history_xml.py), which builds synthetic `.xml.7z` fixtures and round-trips them through the Phase 3 loader; it touches the real DB to test the existence-filter, so run it against a non-production cluster.
+- The repo has no other test suite. The exception is [test_load_pages_meta_history_xml.py](test_load_pages_meta_history_xml.py), which builds synthetic `.xml.7z` fixtures and round-trips them through the Phase 3 loader; it touches the real DB to test the existence-filter, so run it against a non-production cluster. It is **not** a pytest suite — run it as a plain script: `.venv/bin/python test_load_pages_meta_history_xml.py`. The `__main__` block calls the four `test_*` functions in order and prints `ALL TESTS PASSED`; to run a single check, call one function via `.venv/bin/python -c 'import test_load_pages_meta_history_xml as t; t.test_parse_yields_expected_rows()'`.
 
 ### Downloader etiquette
 
@@ -98,8 +111,39 @@ Key facts that affect implementation choices and aren't obvious from a quick web
 - **Page protection data** lives in **SQL dumps** (`page_restrictions`, `logging`) — *not* in the article XML. WMF stopped publishing `logging.sql.gz` and `revision.sql.gz`; both arrive as XML now and need the Phase 1b/2 loaders.
 - **No media in XML/SQL dumps**: images/audio/video are separate (Commons tarballs under `dumps.wikimedia.org/other/`).
 
+## Directory layout (post-2026-06-25 reorganization)
+
+```
+official-dump/
+├── *.py                     # active loaders (download_dumps, load_sql_dumps, load_*_xml)
+├── run_pipeline.sh          # the orchestrator
+├── setup_postgres18.sh      # cluster provisioning
+├── freeze_phase{2,3}.sh     # Phase 4a/4b freeze scripts
+├── phase3_sampler.sh        # 5-min loader-progress sampler (currently running in tmux phase3-sampler)
+├── phase3_loader_active.log # live tee'd by the running loader; do not move
+├── phase3_eta_samples.csv   # live append-only sampler CSV; do not move
+├── key_figures.sql          # canonical sentinel queries; throwaway SQL also lands here
+├── data_collection_plan.md  # phase-by-phase plan
+├── INGESTION_LOG.md         # dated activity log
+├── README.md                # high-level overview
+├── CLAUDE.md                # this file
+├── schema/                  # hand-written DDL (apply via 00_apply.sql)
+├── __inherited__/           # legacy wiki240201 pipeline (do not touch)
+├── docs/                    # deep-dive documentation
+│   ├── STORAGE_LAYOUT.md            # current tablespace + drive map
+│   ├── DATA_LOCATION_GUIDE.md       # researcher-facing where-is-what
+│   ├── STORAGE_MIGRATION_HISTORY.md # the four hops, lessons learned
+│   └── incidents/                   # historical incident write-ups
+├── runbooks/                # historical / completed migration scripts (kept for reference)
+└── logs/                    # archived loader, chain, download logs
+```
+
+The Python loaders, schema, and `run_pipeline.sh` are the **active surface**. Everything in `docs/` and `runbooks/` is reference material from the past 50 days of storage migrations — read it before touching tablespaces, leave it alone otherwise. Reorganized 2026-06-25; before that, all files were at the official-dump root.
+
 ## Conventions
 
-- New code defaults to Python (the `.gitignore` is configured for it). The active venv is `.venv/` at the repo root.
+- New code defaults to Python (the `.gitignore` is configured for it). The active venv is `.venv/` at the repo root — activate it (or call `.venv/bin/python` directly) before running any loader or test. There is **no `requirements.txt`** (deliberately — see the workspace rule below); the venv's runtime deps are `psycopg[binary]` 3.x, `mwxml`, `py7zr`, `phpserialize`, `requests`, and `tqdm`. Install those if reconstructing the venv on a fresh checkout.
 - Throwaway SQL goes in `key_figures.sql`; new persistent tables go in `schema/` and into [schema/00_apply.sql](schema/00_apply.sql)'s order.
 - Don't introduce a build system, monorepo tooling, or root-level requirements file at the workspace level — the sibling `fetch-protection-events/` is a separate repo and should stay independent.
+- New historical / migration documentation goes in `docs/` (or `docs/incidents/` for time-stamped event write-ups), not the root.
+- New migration runbooks go in `runbooks/` once the migration has been executed. Active runbooks under iteration can live at the root briefly.

@@ -378,6 +378,10 @@ def load_one_file(
             cur.execute("SET synchronous_commit = OFF")
             cur.execute("SET maintenance_work_mem = '2GB'")
             cur.execute("SET work_mem = '256MB'")
+            # The DB default tablespace is wiki_ts_lacie (lacie14) which is
+            # full; route TEMP tables (incl. _rev_text_stage) to wiki_ts_sys
+            # (NVMe, plenty of room and fast for small staging).
+            cur.execute("SET temp_tablespaces = 'wiki_ts_sys'")
         # Create the per-session staging table that copy_batch COPYs into
         # and then drains into revision_text with ON CONFLICT DO NOTHING.
         ensure_stage_table(conn)
