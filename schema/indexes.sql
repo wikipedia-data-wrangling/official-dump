@@ -56,10 +56,10 @@ CREATE INDEX IF NOT EXISTS change_tag_tag_idx
 -- ---------- actor ----------
 -- 'find the actor for username X' / IP lookup
 CREATE INDEX IF NOT EXISTS actor_name_idx
-    ON actor (actor_name);
+    ON actor (actor_name) TABLESPACE wiki_ts_sys;
 -- 'all actor rows for a registered user_id'
 CREATE INDEX IF NOT EXISTS actor_user_idx
-    ON actor (actor_user) WHERE actor_user IS NOT NULL;
+    ON actor (actor_user) TABLESPACE wiki_ts_sys WHERE actor_user IS NOT NULL;
 
 -- ---------- logging ----------
 -- yearly counts and log_type filtering ('all protect events in 2018')

@@ -239,3 +239,4 @@ result_export.json
 *.xml.bz2
 *.sql.gz
 *.dump
+logs/index-connect-status.json

@@ -42,6 +42,12 @@ Wikipedia text is dual-licensed under [CC BY-SA 4.0](https://creativecommons.org
 
 ## Tooling
 
+For the loaded PostgreSQL snapshot, see [table relationships and query
+examples](docs/TABLE_RELATIONSHIPS.md). The optional post-load interface
+in `schema/relationships.sql` connects base tables through the
+`wiki_relations` views; `runbooks/index_connect.py` restores missing actor
+indexes and validates supported foreign keys without altering dataset rows.
+
 Working with raw dumps directly:
 
 - [`mwxml`](https://github.com/mediawiki-utilities/python-mwxml) and [`mwparserfromhell`](https://github.com/earwig/mwparserfromhell) — Python parsing of dump XML and wikitext
